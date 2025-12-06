@@ -1,0 +1,29 @@
+{{- if .Values.cnpg.enabled }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ .Values.cnpg.cluster.name }}
+  labels:
+    {{- include "bjw-s.common.lib.metadata.allLabels" . | nindent 4 }}
+spec:
+  instances: {{ .Values.cnpg.cluster.instances }}
+  imageName: {{ .Values.cnpg.cluster.imageName }}
+  storage:
+    size: {{ .Values.cnpg.cluster.storage.size }}
+    {{- if .Values.cnpg.cluster.storage.storageClass }}
+    storageClass: {{ .Values.cnpg.cluster.storage.storageClass }}
+    {{- end }}
+  postgresql:
+    parameters:
+      {{- toYaml .Values.cnpg.cluster.postgresql.parameters | nindent 6 }}
+  superuserSecret:
+    name: {{ .Values.cnpg.cluster.superuserSecret }}
+  bootstrap:
+    initdb:
+      database: {{ .Values.cnpg.cluster.bootstrap.initdb.database }}
+      owner: {{ .Values.cnpg.cluster.bootstrap.initdb.owner }}
+      secret:
+        name: {{ .Values.cnpg.cluster.bootstrap.initdb.secret.name }}
+  monitoring:
+    enablePodMonitor: {{ .Values.cnpg.cluster.monitoring.enablePodMonitor }}
+{{- end }}

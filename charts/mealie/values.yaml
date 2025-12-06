@@ -10,6 +10,27 @@ strategy:
 controllers:
   main:
     enabled: true
+    initContainers:
+      wait-for-db:
+        name: wait-for-db
+        image:
+          repository: postgres
+          tag: "15"
+          pullPolicy: IfNotPresent
+        command:
+          - pg_isready
+          - -h
+          - "mealie-postgres-rw"
+          - -p
+          - "5432"
+          - -U
+          - "mealie"
+        env:
+          - name: PGPASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: "mealie-postgres-app"
+                key: password
     containers:
       main:
         image:
@@ -17,13 +38,27 @@ controllers:
           repository: ghcr.io/mealie-recipes/mealie
           # -- image tag
           # @default -- chart.appVersion
-          tag:
+          tag: "{{ .Chart.AppVersion }}"
           # -- image pull policy
           pullPolicy: IfNotPresent
         # -- environment variables.
         # @default -- See below
         env:
-          TZ: UTC
+          - name: TZ
+            value: America/New_York
+          - name: POSTGRES_SERVER
+            value: "{{ if .Values.cnpg.enabled }}{{ .Values.cnpg.cluster.name }}-rw{{ end }}"
+          - name: POSTGRES_PORT
+            value: "{{ if .Values.cnpg.enabled }}5432{{ end }}"
+          - name: POSTGRES_DB
+            value: "{{ if .Values.cnpg.enabled }}{{ .Values.cnpg.cluster.bootstrap.initdb.database }}{{ end }}"
+          - name: POSTGRES_USER
+            value: "{{ if .Values.cnpg.enabled }}{{ .Values.cnpg.cluster.bootstrap.initdb.owner }}{{ end }}"
+          - name: POSTGRES_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: "{{ if .Values.cnpg.enabled }}{{ .Values.cnpg.cluster.appSecret }}{{ end }}"
+                key: password
 
 # -- Configures service settings for the chart. Normally this does not need to be modified.
 # @default -- See values.yaml
@@ -53,16 +88,27 @@ persistence:
           - path: /app/data/
             readOnly: false
 
-# https://github.com/bitnami/charts/tree/master/bitnami/postgresql/#installing-the-chart
-postgresql:
-  enabled: false
-#  auth:
-#    postgresPassword: ""
-#    username: ""
-#    password: ""
-#    database: ""
-  persistence:
-    enabled: true
-    storageClass:
-    accessModes:
-      - ReadWriteOnce
+# Cloud Native PostgreSQL configuration
+cnpg:
+  enabled: true
+  cluster:
+    name: mealie-postgres
+    instances: 1
+    imageName: ghcr.io/cloudnative-pg/postgresql:15.6
+    storage:
+      size: 10Gi
+      storageClass:
+    postgresql:
+      parameters:
+        max_connections: "100"
+        shared_buffers: "256MB"
+    superuserSecret: mealie-postgres-superuser
+    appSecret: mealie-postgres-app
+    bootstrap:
+      initdb:
+        database: mealie
+        owner: mealie
+        secret:
+          name: mealie-postgres-app
+    monitoring:
+      enablePodMonitor: false
