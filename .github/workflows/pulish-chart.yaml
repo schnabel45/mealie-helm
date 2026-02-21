@@ -1,0 +1,157 @@
+name: Release Helm Chart and Publish to Central Repo
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # Allows manual trigger from GitHub UI
+
+env:
+  CHART_NAME: mealie         # ← CHANGE THIS to your chart's name (used for paths and release naming)
+  CHART_DIR: charts/mealie   # ← CHANGE THIS to your chart's directory relative to repo root
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      CHART_NAME: ${{ env.CHART_NAME }}
+      CHART_VERSION: ${{ steps.get-version.outputs.version }}
+      release_tag: ${{ steps.get-version.outputs.tag }}
+    permissions:
+      contents: write
+    steps:
+      - name: Configure Git
+        run: |
+          git config --global user.name "$GITHUB_ACTOR"
+          git config --global user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Allows git operations if needed later
+
+      - name: Install yq
+        uses: mikefarah/yq@v4.44.3
+
+      - name: Extract chart version from Chart.yaml
+        id: get-version
+        run: |
+          VERSION=$(yq e '.version' "${CHART_DIR}/Chart.yaml")
+          APP_VERSION=$(yq e '.appVersion' "${CHART_DIR}/Chart.yaml")
+          if [[ -z "$VERSION" ]]; then
+            echo "Error: Could not find .version in ${CHART_DIR}/Chart.yaml"
+            exit 1
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "app_version=$APP_VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Debug extracted values
+        run: |
+          echo "CHART_NAME     = ${{ env.CHART_NAME }}"
+          echo "CHART_DIR      = ${{ env.CHART_DIR }}"
+          echo "VERSION        = ${{ steps.get-version.outputs.version }}"
+          echo "APP_VERSION    = ${{ steps.get-version.outputs.app_version }}"
+          echo "TAG            = ${{ steps.get-version.outputs.tag }}"
+
+      - name: Create and push Git tag if it doesn't exist
+        run: |
+          TAG="${{ steps.get-version.outputs.tag }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists — skipping creation"
+          else
+            echo "Creating and pushing new tag $TAG"
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
+
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        id: create-release
+        with:
+          tag_name: ${{ steps.get-version.outputs.tag }}
+          name: Release ${{ env.CHART_NAME }} ${{ steps.get-version.outputs.tag }}
+          body: |
+            Helm chart release for ${{ env.CHART_NAME }} version ${{ steps.get-version.outputs.version }}.
+            
+            - Auto-generated from Chart.yaml
+            - See commit history for changes
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package the Helm chart
+        uses: azure/setup-helm@v4
+
+      - name: helm package
+        run: |
+          VERSION=${{ steps.get-version.outputs.version }}
+          APP_VERSION=${{ steps.get-version.outputs.app_version }}
+          helm package "${{ env.CHART_DIR }}" --version "${VERSION}" --app-version "${APP_VERSION}"
+          ls -l *.tgz
+          
+      - name: Upload chart .tgz to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get-version.outputs.tag }}
+          files: ./*.tgz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-to-central:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Configure Git
+        run: |
+          git config --global user.name "$GITHUB_ACTOR"
+          git config --global user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: helm-chart
+
+      - name: Debug job outputs from release job
+        run: |
+          echo "needs.release.outputs.CHART_NAME    = ${{ needs.release.outputs.CHART_NAME }}"
+          echo "needs.release.outputs.CHART_VERSION = ${{ needs.release.outputs.CHART_VERSION }}"
+          echo "needs.release.outputs.release_tag   = ${{ needs.release.outputs.release_tag }}"
+
+      - name: Download chart from GitHub Release
+        run: |
+          TAG="${{ needs.release.outputs.release_tag }}"
+          echo "Attempting to download release assets for tag: $TAG"
+          cd helm-chart
+          gh release view "$TAG" || echo "Release view failed - may not exist yet or permission issue"
+          gh release download "$TAG" --pattern "*.tgz" --clobber || { echo "Download failed"; exit 1; }
+          ls -l *.tgz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout central repo's gh-pages branch
+        uses: actions/checkout@v4
+        with:
+          repository: schnabel45/helm-charts
+          token: ${{ secrets.CENTRAL_PAT }}
+          ref: gh-pages
+          path: central
+
+      - name: Copy chart to central and clean old versions (optional)
+        run: |
+          mv helm-chart/*.tgz central/
+          cd central
+          # Optional: remove older versions, keep latest 3 to avoid repo bloat
+          ls -1 ${{ needs.release.outputs.CHART_NAME }}-*.tgz 2>/dev/null | sort -rV | tail -n +4 | xargs rm -f || true
+
+      - name: Commit and push to central repo
+        run: |
+          cd central
+          git add *.tgz
+          git commit -m "Add/update ${{ needs.release.outputs.CHART_NAME }}-${{ needs.release.outputs.release_tag }} from source repo" || echo "No changes to commit"
+          git push origin gh-pages

@@ -10,7 +10,7 @@ https://github.com/mealie-recipes/mealie
 
 ## Installing the chart
 ```console
-helm repo add mealie https://schnabel45.github.io/mealie-helm/
+helm repo add schnabel45 https://schnabel45.github.io/
 helm repo update
-helm install mealie mealie/mealie
+helm install mealie schnabel45/mealie
 ```
