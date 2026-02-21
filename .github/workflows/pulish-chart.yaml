@@ -82,6 +82,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Add repos
+        run: |
+          helm repo add bjw-s https://bjw-s-labs.github.io/helm-charts
+
       - name: Package the Helm chart
         uses: azure/setup-helm@v4
 
