@@ -95,7 +95,7 @@ jobs:
           APP_VERSION=${{ steps.get-version.outputs.app_version }}
           echo $VERSION
           echo $APP_VERSION
-          helm dependency update
+          helm dependency update "${{ env.CHART_DIR }}"
           helm package "${{ env.CHART_DIR }}" --version "${VERSION}" --app-version "${APP_VERSION}"
           ls -l *.tgz
           
